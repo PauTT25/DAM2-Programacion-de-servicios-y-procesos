@@ -1,0 +1,559 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Procesador de imágenes con Web Workers</title>
+<style>
+    * { box-sizing: border-box; }
+    body {
+        margin: 0;
+        padding: 24px;
+        font-family: Arial, sans-serif;
+        background: #101827;
+        color: #e8eef8;
+    }
+    .contenedor { max-width: 1250px; margin: auto; }
+    h1 { margin: 0 0 8px; font-size: 28px; }
+    .intro { color: #aab8cc; margin: 0 0 22px; line-height: 1.5; }
+    .panel {
+        background: #1b293d;
+        border: 1px solid #30435e;
+        border-radius: 12px;
+        padding: 18px;
+        margin-bottom: 18px;
+    }
+    .controles {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+        gap: 14px;
+    }
+    label { display: block; font-size: 14px; color: #c8d4e5; margin-bottom: 7px; }
+    input, select, button {
+        width: 100%;
+        padding: 10px;
+        border-radius: 7px;
+        border: 1px solid #435875;
+        background: #101b2b;
+        color: #f2f6fc;
+    }
+    input[type="range"] { padding: 7px 0; }
+    input[type="file"] { padding: 7px; }
+    button { cursor: pointer; font-weight: bold; background: #29476d; }
+    button:hover:not(:disabled) { background: #376397; }
+    button:disabled { opacity: .45; cursor: not-allowed; }
+    .acciones { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
+    .acciones button { width: auto; min-width: 120px; }
+    .principal { background: #1765a8; border-color: #287fc8; }
+    .peligro { background: #713b45; border-color: #96515d; }
+    .estado-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
+        gap: 10px;
+        margin-top: 14px;
+    }
+    .dato { background: #101b2b; border-radius: 8px; padding: 12px; }
+    .dato small { display: block; color: #9fb0c6; margin-bottom: 6px; }
+    .dato strong { font-size: 20px; }
+    progress { width: 100%; height: 17px; margin-top: 15px; accent-color: #43a3f2; }
+    .zona-imagen {
+        min-height: 220px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        overflow: auto;
+        background: #0b1320;
+        border: 1px dashed #435875;
+        border-radius: 9px;
+        padding: 10px;
+    }
+    canvas { max-width: 100%; height: auto; }
+    #mensaje { color: #aab8cc; margin: 10px 0 0; font-size: 14px; }
+    .nota { color: #9fb0c6; font-size: 13px; line-height: 1.5; }
+    @media (max-width: 600px) {
+        body { padding: 12px; }
+        h1 { font-size: 23px; }
+        .acciones button { flex: 1; }
+    }
+</style>
+</head>
+<body>
+<div class="contenedor">
+    <h1>Procesador de imágenes con Web Workers</h1>
+    <p class="intro">
+        Divide una imagen en bloques y distribuye su procesamiento entre varios Workers.
+        Puedes cambiar el tamaño de los bloques, el orden y el efecto aplicado.
+    </p>
+
+    <section class="panel">
+        <div class="controles">
+            <div>
+                <label for="archivo">Seleccionar imagen</label>
+                <input type="file" id="archivo" accept="image/*">
+            </div>
+            <div>
+                <label for="tamano">Tamaño de cada bloque</label>
+                <select id="tamano">
+                    <option value="8">8 × 8 píxeles (muy pequeños)</option>
+                    <option value="16">16 × 16 píxeles</option>
+                    <option value="20" selected>20 × 20 píxeles</option>
+                    <option value="32">32 × 32 píxeles</option>
+                    <option value="64">64 × 64 píxeles</option>
+                    <option value="128">128 × 128 píxeles (grandes)</option>
+                </select>
+            </div>
+            <div>
+                <label for="trabajadores">Número de Workers</label>
+                <select id="trabajadores">
+                    <option value="auto">Automático (núcleos disponibles)</option>
+                    <option value="1">1 Worker</option>
+                    <option value="2">2 Workers</option>
+                    <option value="4">4 Workers</option>
+                    <option value="6">6 Workers</option>
+                    <option value="8">8 Workers</option>
+                    <option value="12">12 Workers</option>
+                </select>
+            </div>
+            <div>
+                <label for="orden">Orden de procesamiento</label>
+                <select id="orden">
+                    <option value="random" selected>Aleatorio</option>
+                    <option value="rows">Por filas (izquierda a derecha)</option>
+                    <option value="center">Del centro hacia fuera</option>
+                </select>
+            </div>
+            <div>
+                <label for="efecto">Efecto de imagen</label>
+                <select id="efecto">
+                    <option value="invert">Invertir colores</option>
+                    <option value="gray">Escala de grises</option>
+                    <option value="sepia">Sepia</option>
+                    <option value="bright">Aumentar brillo</option>
+                    <option value="contrast">Aumentar contraste</option>
+                </select>
+            </div>
+            <div>
+                <label for="intensidad">Intensidad del efecto: <span id="valorIntensidad">35</span></label>
+                <input type="range" id="intensidad" min="0" max="100" value="35">
+            </div>
+        </div>
+
+        <div class="acciones">
+            <button id="iniciar" class="principal" disabled>Iniciar procesamiento</button>
+            <button id="pausar" disabled>Pausar</button>
+            <button id="reanudar" disabled>Reanudar</button>
+            <button id="cancelar" class="peligro" disabled>Cancelar</button>
+            <button id="descargar" disabled>Descargar resultado</button>
+        </div>
+
+        <div class="estado-grid">
+            <div class="dato"><small>Progreso</small><strong id="porcentaje">0 %</strong></div>
+            <div class="dato"><small>Bloques procesados</small><strong id="procesados">0 / 0</strong></div>
+            <div class="dato"><small>Workers activos</small><strong id="activos">0</strong></div>
+            <div class="dato"><small>Tiempo transcurrido</small><strong id="tiempo">0.00 s</strong></div>
+            <div class="dato"><small>Workers configurados</small><strong id="totalWorkers">0</strong></div>
+        </div>
+        <progress id="barra" value="0" max="100"></progress>
+        <p id="mensaje">Selecciona una imagen para comenzar.</p>
+    </section>
+
+    <section class="panel">
+        <h2>Imagen procesada</h2>
+        <div class="zona-imagen">
+            <canvas id="lienzo"></canvas>
+        </div>
+        <p class="nota">
+            La imagen se muestra progresivamente según los Workers terminan sus bloques.
+            El resultado se puede descargar en formato PNG.
+        </p>
+    </section>
+</div>
+
+<script>
+const lienzo = document.querySelector("#lienzo");
+const contexto = lienzo.getContext("2d", { willReadFrequently: true });
+
+const archivo = document.querySelector("#archivo");
+const iniciar = document.querySelector("#iniciar");
+const pausar = document.querySelector("#pausar");
+const reanudar = document.querySelector("#reanudar");
+const cancelar = document.querySelector("#cancelar");
+const descargar = document.querySelector("#descargar");
+const intensidad = document.querySelector("#intensidad");
+
+let imagenCargada = false;
+let imagenOriginal = null;
+let procesador = null;
+let tiempoInicio = 0;
+let intervaloTiempo = null;
+let resultadoDisponible = false;
+
+// Actualiza el texto que acompaña al control de intensidad.
+intensidad.addEventListener("input", function() {
+    document.querySelector("#valorIntensidad").textContent = intensidad.value;
+});
+
+// Carga la imagen elegida y la dibuja en el canvas.
+archivo.addEventListener("change", function() {
+    const fichero = archivo.files[0];
+    if (!fichero) return;
+
+    if (procesador) procesador.cancelar();
+
+    const url = URL.createObjectURL(fichero);
+    const imagen = new Image();
+
+    imagen.onload = function() {
+        lienzo.width = imagen.naturalWidth;
+        lienzo.height = imagen.naturalHeight;
+        contexto.drawImage(imagen, 0, 0);
+        imagenOriginal = contexto.getImageData(0, 0, lienzo.width, lienzo.height);
+        imagenCargada = true;
+        resultadoDisponible = false;
+        iniciar.disabled = false;
+        descargar.disabled = true;
+        document.querySelector("#mensaje").textContent =
+            "Imagen cargada: " + imagen.naturalWidth + " × " + imagen.naturalHeight + " píxeles.";
+        reiniciarIndicadores();
+        URL.revokeObjectURL(url);
+    };
+
+    imagen.onerror = function() {
+        document.querySelector("#mensaje").textContent = "No se ha podido abrir la imagen.";
+        URL.revokeObjectURL(url);
+    };
+
+    imagen.src = url;
+});
+
+// Clase que crea y coordina el conjunto de Web Workers.
+class ProcesadorImagen {
+    constructor(canvas, opciones, eventos) {
+        this.canvas = canvas;
+        this.contexto = canvas.getContext("2d", { willReadFrequently: true });
+        this.opciones = opciones;
+        this.eventos = eventos;
+        this.workers = [];
+        this.cola = [];
+        this.procesados = 0;
+        this.activos = 0;
+        this.pausado = false;
+        this.cancelado = false;
+        this.terminado = false;
+        this.total = 0;
+    }
+
+    // Crea las coordenadas de todos los bloques de la imagen.
+    crearCachos() {
+        const lista = [];
+        const tamano = this.opciones.tamano;
+
+        for (let y = 0; y < this.canvas.height; y += tamano) {
+            for (let x = 0; x < this.canvas.width; x += tamano) {
+                lista.push({
+                    x: x,
+                    y: y,
+                    ancho: Math.min(tamano, this.canvas.width - x),
+                    alto: Math.min(tamano, this.canvas.height - y)
+                });
+            }
+        }
+
+        if (this.opciones.orden === "random") {
+            // Algoritmo Fisher-Yates para mezclar los bloques.
+            for (let i = lista.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [lista[i], lista[j]] = [lista[j], lista[i]];
+            }
+        } else if (this.opciones.orden === "center") {
+            const centroX = this.canvas.width / 2;
+            const centroY = this.canvas.height / 2;
+
+            lista.sort(function(a, b) {
+                const distanciaA = Math.hypot(a.x - centroX, a.y - centroY);
+                const distanciaB = Math.hypot(b.x - centroX, b.y - centroY);
+                return distanciaA - distanciaB;
+            });
+        }
+
+        return lista;
+    }
+
+    // Prepara los Workers y comienza a repartirles bloques.
+    iniciar() {
+        this.cola = this.crearCachos();
+        this.total = this.cola.length;
+
+        const cantidad = Math.min(this.opciones.workers, this.total);
+        this.eventos.total(this.total, cantidad);
+
+        const codigoWorker = `
+            self.onmessage = function(evento) {
+                const tarea = evento.data;
+                const datos = new Uint8ClampedArray(tarea.buffer);
+                const intensidad = tarea.intensidad / 100;
+
+                for (let i = 0; i < datos.length; i += 4) {
+                    let rojo = datos[i];
+                    let verde = datos[i + 1];
+                    let azul = datos[i + 2];
+
+                    if (tarea.efecto === "invert") {
+                        rojo = 255 - rojo;
+                        verde = 255 - verde;
+                        azul = 255 - azul;
+                    }
+
+                    if (tarea.efecto === "gray") {
+                        const gris = 0.299 * rojo + 0.587 * verde + 0.114 * azul;
+                        rojo = gris;
+                        verde = gris;
+                        azul = gris;
+                    }
+
+                    if (tarea.efecto === "sepia") {
+                        const r = rojo, g = verde, b = azul;
+                        rojo = Math.min(255, r * 0.393 + g * 0.769 + b * 0.189);
+                        verde = Math.min(255, r * 0.349 + g * 0.686 + b * 0.168);
+                        azul = Math.min(255, r * 0.272 + g * 0.534 + b * 0.131);
+                    }
+
+                    if (tarea.efecto === "bright") {
+                        const cambio = 100 * intensidad;
+                        rojo = Math.min(255, rojo + cambio);
+                        verde = Math.min(255, verde + cambio);
+                        azul = Math.min(255, azul + cambio);
+                    }
+
+                    if (tarea.efecto === "contrast") {
+                        const factor = 1 + intensidad * 2;
+                        rojo = Math.max(0, Math.min(255, (rojo - 128) * factor + 128));
+                        verde = Math.max(0, Math.min(255, (verde - 128) * factor + 128));
+                        azul = Math.max(0, Math.min(255, (azul - 128) * factor + 128));
+                    }
+
+                    datos[i] = rojo;
+                    datos[i + 1] = verde;
+                    datos[i + 2] = azul;
+                    // El canal alfa (transparencia) se conserva.
+                }
+
+                self.postMessage({
+                    x: tarea.x,
+                    y: tarea.y,
+                    ancho: tarea.ancho,
+                    alto: tarea.alto,
+                    buffer: tarea.buffer
+                }, [tarea.buffer]);
+            };
+        `;
+
+        const blob = new Blob([codigoWorker], { type: "application/javascript" });
+        const url = URL.createObjectURL(blob);
+
+        for (let i = 0; i < cantidad; i++) {
+            const worker = new Worker(url);
+
+            worker.onmessage = (evento) => {
+                this.activos--;
+                const resultado = evento.data;
+                const pixeles = new Uint8ClampedArray(resultado.buffer);
+                const imagenDatos = new ImageData(pixeles, resultado.ancho, resultado.alto);
+
+                this.contexto.putImageData(imagenDatos, resultado.x, resultado.y);
+                this.procesados++;
+
+                this.eventos.progreso(this.procesados, this.total, this.activos);
+                this.repartirTareas();
+            };
+
+            worker.onerror = (error) => {
+                this.cancelar();
+                this.eventos.error("Error en un Worker: " + error.message);
+            };
+
+            this.workers.push(worker);
+        }
+
+        URL.revokeObjectURL(url);
+        this.repartirTareas();
+    }
+
+    // Envía una tarea libre a cada Worker disponible.
+    repartirTareas() {
+        if (this.cancelado || this.pausado || this.terminado) return;
+
+        for (const worker of this.workers) {
+            if (this.cola.length === 0) break;
+
+            // Cada Worker recibe un bloque y sus píxeles.
+            const bloque = this.cola.shift();
+            const imagenDatos = this.contexto.getImageData(
+                bloque.x, bloque.y, bloque.ancho, bloque.alto
+            );
+
+            this.activos++;
+
+            worker.postMessage({
+                x: bloque.x,
+                y: bloque.y,
+                ancho: bloque.ancho,
+                alto: bloque.alto,
+                efecto: this.opciones.efecto,
+                intensidad: this.opciones.intensidad,
+                buffer: imagenDatos.data.buffer
+            }, [imagenDatos.data.buffer]);
+        }
+
+        this.eventos.progreso(this.procesados, this.total, this.activos);
+
+        if (this.procesados === this.total && this.activos === 0) {
+            this.terminado = true;
+            this.destruirWorkers();
+            this.eventos.finalizado();
+        }
+    }
+
+    pausarProceso() {
+        this.pausado = true;
+    }
+
+    reanudarProceso() {
+        this.pausado = false;
+        this.repartirTareas();
+    }
+
+    cancelar() {
+        this.cancelado = true;
+        this.destruirWorkers();
+    }
+
+    destruirWorkers() {
+        this.workers.forEach(worker => worker.terminate());
+        this.workers = [];
+        this.activos = 0;
+    }
+}
+
+iniciar.addEventListener("click", function() {
+    if (!imagenCargada) return;
+
+    if (procesador) procesador.cancelar();
+
+    // Cada ejecución comienza desde la imagen original, no desde el resultado anterior.
+    contexto.putImageData(imagenOriginal, 0, 0);
+    reiniciarIndicadores();
+    resultadoDisponible = false;
+    descargar.disabled = true;
+
+    let numeroWorkers = document.querySelector("#trabajadores").value;
+    if (numeroWorkers === "auto") {
+        numeroWorkers = navigator.hardwareConcurrency || 4;
+    }
+    numeroWorkers = Math.max(1, Math.min(32, Number(numeroWorkers)));
+
+    const opciones = {
+        tamano: Number(document.querySelector("#tamano").value),
+        workers: numeroWorkers,
+        orden: document.querySelector("#orden").value,
+        efecto: document.querySelector("#efecto").value,
+        intensidad: Number(intensidad.value)
+    };
+
+    tiempoInicio = performance.now();
+    iniciar.disabled = true;
+    archivo.disabled = true;
+    pausar.disabled = false;
+    cancelar.disabled = false;
+    reanudar.disabled = true;
+
+    intervaloTiempo = setInterval(actualizarTiempo, 100);
+
+    procesador = new ProcesadorImagen(lienzo, opciones, {
+        total: function(total, workers) {
+            document.querySelector("#totalWorkers").textContent = workers;
+            document.querySelector("#procesados").textContent = "0 / " + total;
+            document.querySelector("#mensaje").textContent =
+                "Procesando " + total + " bloques con " + workers + " Workers.";
+        },
+        progreso: function(hechos, total, activos) {
+            const porcentaje = total === 0 ? 100 : Math.round(hechos / total * 100);
+            document.querySelector("#barra").value = porcentaje;
+            document.querySelector("#porcentaje").textContent = porcentaje + " %";
+            document.querySelector("#procesados").textContent = hechos + " / " + total;
+            document.querySelector("#activos").textContent = activos;
+        },
+        finalizado: function() {
+            finalizarInterfaz("Procesamiento terminado correctamente.");
+            resultadoDisponible = true;
+            descargar.disabled = false;
+        },
+        error: function(mensaje) {
+            finalizarInterfaz(mensaje);
+        }
+    });
+
+    procesador.iniciar();
+});
+
+pausar.addEventListener("click", function() {
+    if (!procesador) return;
+    procesador.pausarProceso();
+    pausar.disabled = true;
+    reanudar.disabled = false;
+    document.querySelector("#mensaje").textContent =
+        "Pausado. Los Workers terminarán los bloques que ya estaban procesando.";
+});
+
+reanudar.addEventListener("click", function() {
+    if (!procesador) return;
+    procesador.reanudarProceso();
+    pausar.disabled = false;
+    reanudar.disabled = true;
+    document.querySelector("#mensaje").textContent = "Procesamiento reanudado.";
+});
+
+cancelar.addEventListener("click", function() {
+    if (procesador) procesador.cancelar();
+    finalizarInterfaz("Procesamiento cancelado.");
+});
+
+descargar.addEventListener("click", function() {
+    if (!resultadoDisponible) return;
+    const enlace = document.createElement("a");
+    enlace.download = "imagen-procesada.png";
+    enlace.href = lienzo.toDataURL("image/png");
+    enlace.click();
+});
+
+function actualizarTiempo() {
+    const segundos = (performance.now() - tiempoInicio) / 1000;
+    document.querySelector("#tiempo").textContent = segundos.toFixed(2) + " s";
+}
+
+function finalizarInterfaz(mensaje) {
+    clearInterval(intervaloTiempo);
+    iniciar.disabled = !imagenCargada;
+    archivo.disabled = false;
+    pausar.disabled = true;
+    reanudar.disabled = true;
+    cancelar.disabled = true;
+    document.querySelector("#activos").textContent = "0";
+    document.querySelector("#mensaje").textContent = mensaje;
+}
+
+function reiniciarIndicadores() {
+    clearInterval(intervaloTiempo);
+    document.querySelector("#porcentaje").textContent = "0 %";
+    document.querySelector("#procesados").textContent = "0 / 0";
+    document.querySelector("#activos").textContent = "0";
+    document.querySelector("#totalWorkers").textContent = "0";
+    document.querySelector("#tiempo").textContent = "0.00 s";
+    document.querySelector("#barra").value = 0;
+    pausar.disabled = true;
+    reanudar.disabled = true;
+    cancelar.disabled = true;
+}
+</script>
+</body>
+</html>
